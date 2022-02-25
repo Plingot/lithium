@@ -3563,125 +3563,100 @@ template <typename Req, typename Resp> struct api {
 
 
 
-#ifndef LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_OUTPUT_BUFFER_HH
-#define LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_OUTPUT_BUFFER_HH
+#ifndef LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_HTTP_TOP_HEADER_BUILDER_HH
+#define LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_HTTP_TOP_HEADER_BUILDER_HH
 
 
+// #ifdef LITHIUM_SERVER_NAME
+//   #define MACRO_TO_STR2(L) #L
+//   #define MACRO_TO_STR(L) MACRO_TO_STR2(L)
 
-namespace li {
+//   #define LITHIUM_SERVER_NAME_HEADER "Server: " MACRO_TO_STR(LITHIUM_SERVER_NAME) "\r\n"
 
-struct output_buffer {
+//   #undef MACRO_TO_STR
+//   #undef MACRO_TO_STR2
+// #else
+//   #define LITHIUM_SERVER_NAME_HEADER "Server: Lithium\r\n"
+// #endif
 
-  output_buffer() : buffer_(nullptr), own_buffer_(false), cursor_(nullptr), end_(nullptr), flush_([] (const char*, int) constexpr {}) {}
+namespace internal {
 
-  output_buffer(output_buffer&& o)
-      : buffer_(o.buffer_), own_buffer_(o.own_buffer_), cursor_(o.cursor_), end_(o.end_),
-        flush_(o.flush_) {
-    o.buffer_ = nullptr;
-    o.own_buffer_ = false;
+struct double_buffer {
+
+  double_buffer() {
+    this->p1 = this->b1;
+    this->p2 = this->b2;
   }
 
-  output_buffer(
-      int capacity, std::function<void(const char*, int)> flush_ = [](const char*, int) {})
-      : buffer_(new char[capacity]), own_buffer_(true), cursor_(buffer_), end_(buffer_ + capacity),
-        flush_(flush_) {
-    assert(buffer_);
+  void swap() {
+    std::swap(this->p1, this->p2);
   }
 
-  output_buffer(
-      void* buffer, int capacity,
-      std::function<void(const char*, int)> flush_ = [](const char*, int) {})
-      : buffer_((char*)buffer), own_buffer_(false), cursor_(buffer_), end_(buffer_ + capacity),
-        flush_(flush_) {
-    assert(buffer_);
-  }
+  char* current_buffer() { return this->p1; }
+  char* next_buffer() { return this->p2; }
+  int size() { return 150; }
 
-  ~output_buffer() {
-    if (own_buffer_)
-      delete[] buffer_;
-  }
-
-  output_buffer& operator=(output_buffer&& o) {
-    buffer_ = o.buffer_;
-    own_buffer_ = o.own_buffer_;
-    cursor_ = o.cursor_;
-    end_ = o.end_;
-    flush_ = o.flush_;
-    o.buffer_ = nullptr;
-    o.own_buffer_ = false;
-    return *this;
-  }
-
-  void reset() { cursor_ = buffer_; }
-
-  std::size_t size() { return cursor_ - buffer_; }
-  void flush() {
-    flush_(buffer_, size());
-    reset();
-  }
-
-  output_buffer& operator<<(std::string_view s) {
-    if (cursor_ + s.size() >= end_)
-      flush();
-
-    assert(cursor_ + s.size() < end_);
-    memcpy(cursor_, s.data(), s.size());
-    cursor_ += s.size();
-    return *this;
-  }
-
-  output_buffer& operator<<(const char* s) { return operator<<(std::string_view(s, strlen(s))); }
-  output_buffer& operator<<(char v) {
-    cursor_[0] = v;
-    cursor_++;
-    return *this;
-  }
-
-  inline output_buffer& append(const char c) { return (*this) << c; }
-  
-  output_buffer& operator<<(std::size_t v) {
-    if (v == 0)
-      operator<<('0');
-
-    char buffer[10];
-    char* str_start = buffer;
-    for (int i = 0; i < 10; i++) {
-      if (v > 0)
-        str_start = buffer + 9 - i;
-      buffer[9 - i] = (v % 10) + '0';
-      v /= 10;
-    }
-    operator<<(std::string_view(str_start, buffer + 10 - str_start));
-    return *this;
-  }
-  // template <typename I>
-  // output_buffer& operator<<(unsigned long s)
-  // {
-  //   typedef std::array<char, 150> buf_t;
-  //   buf_t b = boost::lexical_cast<buf_t>(v);
-  //   return operator<<(std::string_view(b.begin(), strlen(b.begin())));
-  // }
-
-  template <typename I>
-  output_buffer& operator<<(I v) {
-    typedef std::array<char, 150> buf_t;
-    buf_t b = boost::lexical_cast<buf_t>(v);
-    return operator<<(std::string_view(b.begin(), strlen(b.begin())));
-  }
-
-  
-  std::string_view to_string_view() { return std::string_view(buffer_, cursor_ - buffer_); }
-
-  char* buffer_;
-  bool own_buffer_;
-  char* cursor_;
-  char* end_;
-  std::function<void(const char* s, int d)> flush_;
+  char* p1;
+  char* p2;
+  char b1[150];
+  char b2[150];
 };
 
-} // namespace li
+}
 
-#endif // LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_OUTPUT_BUFFER_HH
+struct http_top_header_builder {
+
+  std::string_view top_header() { return std::string_view(tmp.current_buffer(), top_header_size); }; 
+  std::string_view top_header_200() { return std::string_view(tmp_200.current_buffer(), top_header_200_size); }; 
+
+  void tick() {
+    time_t t = time(NULL);
+    struct tm tm;
+    gmtime_r(&t, &tm);
+
+    top_header_size = strftime(tmp.next_buffer(), tmp.size(),
+#ifdef LITHIUM_SERVER_NAME
+  #define MACRO_TO_STR2(L) #L
+  #define MACRO_TO_STR(L) MACRO_TO_STR2(L)
+  "\r\nServer: " MACRO_TO_STR(LITHIUM_SERVER_NAME) "\r\n"
+
+  #undef MACRO_TO_STR
+  #undef MACRO_TO_STR2
+#else
+  "\r\nServer: Lithium\r\n"
+#endif
+      "Date: %a, %d %b %Y %T GMT\r\n", &tm);
+    tmp.swap();
+
+    top_header_200_size = strftime(tmp_200.next_buffer(), tmp_200.size(), 
+      "HTTP/1.1 200 OK\r\n"
+#ifdef LITHIUM_SERVER_NAME
+  #define MACRO_TO_STR2(L) #L
+  #define MACRO_TO_STR(L) MACRO_TO_STR2(L)
+  "Server: " MACRO_TO_STR(LITHIUM_SERVER_NAME) "\r\n"
+
+  #undef MACRO_TO_STR
+  #undef MACRO_TO_STR2
+#else
+  "Server: Lithium\r\n"
+#endif
+
+      // LITHIUM_SERVER_NAME_HEADER
+      "Date: %a, %d %b %Y %T GMT\r\n", &tm);
+
+    tmp_200.swap();
+  }
+
+  internal::double_buffer tmp;
+  int top_header_size;
+
+  internal::double_buffer tmp_200;
+  int top_header_200_size;
+};
+
+#undef LITHIUM_SERVER_NAME_HEADER
+
+#endif // LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_HTTP_TOP_HEADER_BUILDER_HH
 
 #ifndef LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_INPUT_BUFFER_HH
 #define LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_INPUT_BUFFER_HH
@@ -3824,6 +3799,126 @@ struct input_buffer {
 } // namespace li
 
 #endif // LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_INPUT_BUFFER_HH
+
+#ifndef LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_OUTPUT_BUFFER_HH
+#define LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_OUTPUT_BUFFER_HH
+
+
+
+namespace li {
+
+struct output_buffer {
+
+  output_buffer() : buffer_(nullptr), own_buffer_(false), cursor_(nullptr), end_(nullptr), flush_([] (const char*, int) constexpr {}) {}
+
+  output_buffer(output_buffer&& o)
+      : buffer_(o.buffer_), own_buffer_(o.own_buffer_), cursor_(o.cursor_), end_(o.end_),
+        flush_(o.flush_) {
+    o.buffer_ = nullptr;
+    o.own_buffer_ = false;
+  }
+
+  output_buffer(
+      int capacity, std::function<void(const char*, int)> flush_ = [](const char*, int) {})
+      : buffer_(new char[capacity]), own_buffer_(true), cursor_(buffer_), end_(buffer_ + capacity),
+        flush_(flush_) {
+    assert(buffer_);
+  }
+
+  output_buffer(
+      void* buffer, int capacity,
+      std::function<void(const char*, int)> flush_ = [](const char*, int) {})
+      : buffer_((char*)buffer), own_buffer_(false), cursor_(buffer_), end_(buffer_ + capacity),
+        flush_(flush_) {
+    assert(buffer_);
+  }
+
+  ~output_buffer() {
+    if (own_buffer_)
+      delete[] buffer_;
+  }
+
+  output_buffer& operator=(output_buffer&& o) {
+    buffer_ = o.buffer_;
+    own_buffer_ = o.own_buffer_;
+    cursor_ = o.cursor_;
+    end_ = o.end_;
+    flush_ = o.flush_;
+    o.buffer_ = nullptr;
+    o.own_buffer_ = false;
+    return *this;
+  }
+
+  void reset() { cursor_ = buffer_; }
+
+  std::size_t size() { return cursor_ - buffer_; }
+  void flush() {
+    flush_(buffer_, size());
+    reset();
+  }
+
+  output_buffer& operator<<(std::string_view s) {
+    if (cursor_ + s.size() >= end_)
+      flush();
+
+    assert(cursor_ + s.size() < end_);
+    memcpy(cursor_, s.data(), s.size());
+    cursor_ += s.size();
+    return *this;
+  }
+
+  output_buffer& operator<<(const char* s) { return operator<<(std::string_view(s, strlen(s))); }
+  output_buffer& operator<<(char v) {
+    cursor_[0] = v;
+    cursor_++;
+    return *this;
+  }
+
+  inline output_buffer& append(const char c) { return (*this) << c; }
+  
+  output_buffer& operator<<(std::size_t v) {
+    if (v == 0)
+      operator<<('0');
+
+    char buffer[10];
+    char* str_start = buffer;
+    for (int i = 0; i < 10; i++) {
+      if (v > 0)
+        str_start = buffer + 9 - i;
+      buffer[9 - i] = (v % 10) + '0';
+      v /= 10;
+    }
+    operator<<(std::string_view(str_start, buffer + 10 - str_start));
+    return *this;
+  }
+  // template <typename I>
+  // output_buffer& operator<<(unsigned long s)
+  // {
+  //   typedef std::array<char, 150> buf_t;
+  //   buf_t b = boost::lexical_cast<buf_t>(v);
+  //   return operator<<(std::string_view(b.begin(), strlen(b.begin())));
+  // }
+
+  template <typename I>
+  output_buffer& operator<<(I v) {
+    typedef std::array<char, 150> buf_t;
+    buf_t b = boost::lexical_cast<buf_t>(v);
+    return operator<<(std::string_view(b.begin(), strlen(b.begin())));
+  }
+
+  
+  std::string_view to_string_view() { return std::string_view(buffer_, cursor_ - buffer_); }
+
+  char* buffer_;
+  bool own_buffer_;
+  char* cursor_;
+  char* end_;
+  std::function<void(const char* s, int d)> flush_;
+};
+
+} // namespace li
+
+#endif // LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_OUTPUT_BUFFER_HH
 
 #ifndef LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_TCP_SERVER_HH
 #define LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_TCP_SERVER_HH
@@ -4416,101 +4511,6 @@ inline std::string_view url_unescape(std::string_view str) {
 } // namespace li
 
 #endif // LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_URL_UNESCAPE_HH
-
-#ifndef LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_HTTP_TOP_HEADER_BUILDER_HH
-#define LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_HTTP_TOP_HEADER_BUILDER_HH
-
-
-// #ifdef LITHIUM_SERVER_NAME
-//   #define MACRO_TO_STR2(L) #L
-//   #define MACRO_TO_STR(L) MACRO_TO_STR2(L)
-
-//   #define LITHIUM_SERVER_NAME_HEADER "Server: " MACRO_TO_STR(LITHIUM_SERVER_NAME) "\r\n"
-
-//   #undef MACRO_TO_STR
-//   #undef MACRO_TO_STR2
-// #else
-//   #define LITHIUM_SERVER_NAME_HEADER "Server: Lithium\r\n"
-// #endif
-
-namespace internal {
-
-struct double_buffer {
-
-  double_buffer() {
-    this->p1 = this->b1;
-    this->p2 = this->b2;
-  }
-
-  void swap() {
-    std::swap(this->p1, this->p2);
-  }
-
-  char* current_buffer() { return this->p1; }
-  char* next_buffer() { return this->p2; }
-  int size() { return 150; }
-
-  char* p1;
-  char* p2;
-  char b1[150];
-  char b2[150];
-};
-
-}
-
-struct http_top_header_builder {
-
-  std::string_view top_header() { return std::string_view(tmp.current_buffer(), top_header_size); }; 
-  std::string_view top_header_200() { return std::string_view(tmp_200.current_buffer(), top_header_200_size); }; 
-
-  void tick() {
-    time_t t = time(NULL);
-    struct tm tm;
-    gmtime_r(&t, &tm);
-
-    top_header_size = strftime(tmp.next_buffer(), tmp.size(),
-#ifdef LITHIUM_SERVER_NAME
-  #define MACRO_TO_STR2(L) #L
-  #define MACRO_TO_STR(L) MACRO_TO_STR2(L)
-  "\r\nServer: " MACRO_TO_STR(LITHIUM_SERVER_NAME) "\r\n"
-
-  #undef MACRO_TO_STR
-  #undef MACRO_TO_STR2
-#else
-  "\r\nServer: Lithium\r\n"
-#endif
-      "Date: %a, %d %b %Y %T GMT\r\n", &tm);
-    tmp.swap();
-
-    top_header_200_size = strftime(tmp_200.next_buffer(), tmp_200.size(), 
-      "HTTP/1.1 200 OK\r\n"
-#ifdef LITHIUM_SERVER_NAME
-  #define MACRO_TO_STR2(L) #L
-  #define MACRO_TO_STR(L) MACRO_TO_STR2(L)
-  "Server: " MACRO_TO_STR(LITHIUM_SERVER_NAME) "\r\n"
-
-  #undef MACRO_TO_STR
-  #undef MACRO_TO_STR2
-#else
-  "Server: Lithium\r\n"
-#endif
-
-      // LITHIUM_SERVER_NAME_HEADER
-      "Date: %a, %d %b %Y %T GMT\r\n", &tm);
-
-    tmp_200.swap();
-  }
-
-  internal::double_buffer tmp;
-  int top_header_size;
-
-  internal::double_buffer tmp_200;
-  int top_header_200_size;
-};
-
-#undef LITHIUM_SERVER_NAME_HEADER
-
-#endif // LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_HTTP_TOP_HEADER_BUILDER_HH
 
 
 #ifndef LITHIUM_SINGLE_HEADER_GUARD_LI_HTTP_SERVER_CONTENT_TYPES_HH
@@ -5516,20 +5516,21 @@ namespace http_async_impl {
 static char* date_buf = nullptr;
 static int date_buf_size = 0;
 
-using ::li::content_types; // static std::unordered_map<std::string_view, std::string_view> content_types
+using ::li::content_types; // static std::unordered_map<std::string_view, std::string_view>
+                           // content_types
 
-static thread_local std::unordered_map<std::string, std::pair<std::string_view, std::string_view>> static_files;
+static thread_local std::unordered_map<std::string, std::pair<std::string_view, std::string_view>>
+    static_files;
 
 http_top_header_builder http_top_header [[gnu::weak]];
 
-template <typename FIBER>
-struct generic_http_ctx {
+template <typename FIBER> struct generic_http_ctx {
 
   generic_http_ctx(input_buffer& _rb, FIBER& _fiber) : rb(_rb), fiber(_fiber) {
     get_parameters_map.reserve(10);
     response_headers.reserve(20);
 
-    output_stream = output_buffer(50*1024, [&](const char* d, int s) { fiber.write(d, s); });
+    output_stream = output_buffer(50 * 1024, [&](const char* d, int s) { fiber.write(d, s); });
 
     headers_stream =
         output_buffer(1000, [&](const char* d, int s) { output_stream << std::string_view(d, s); });
@@ -5632,9 +5633,8 @@ struct generic_http_ctx {
     // #ifdef LITHIUM_SERVER_NAME
     //   #define MACRO_TO_STR2(L) #L
     //   #define MACRO_TO_STR(L) MACRO_TO_STR2(L)
-    //   output_stream << "\r\nConnection: keep-alive\r\nServer: " MACRO_TO_STR(LITHIUM_SERVER_NAME) "\r\n";
-    //   #undef MACRO_TO_STR
-    //   #undef MACRO_TO_STR2
+    //   output_stream << "\r\nConnection: keep-alive\r\nServer: " MACRO_TO_STR(LITHIUM_SERVER_NAME)
+    //   "\r\n"; #undef MACRO_TO_STR #undef MACRO_TO_STR2
     // #else
     //   output_stream << "\r\nConnection: keep-alive\r\nServer: Lithium\r\n";
     // #endif
@@ -5668,7 +5668,6 @@ struct generic_http_ctx {
         content_type_ = get_value();
         chunked_ = (content_type_ == "chunked");
       }
-
     }
   }
 
@@ -5706,9 +5705,7 @@ struct generic_http_ctx {
     headers_stream.flush(); // flushes to output_stream.
     output_stream << "Content-Length: " << json_stream.to_string_view().size() << "\r\n\r\n";
     json_stream.flush(); // flushes to output_stream.
-    
   }
-
 
   void respond_if_needed() {
     if (!response_written_) {
@@ -5799,16 +5796,15 @@ struct generic_http_ctx {
       int file_size = lseek(fd, (size_t)0, SEEK_END);
       auto content =
           std::string_view((char*)mmap(0, file_size, PROT_READ, MAP_SHARED, fd, 0), file_size);
-      if (!content.data()) throw http_error::not_found("File not found.");
+      if (!content.data())
+        throw http_error::not_found("File not found.");
       close(fd);
 
       size_t ext_pos = std::string_view(path).rfind('.');
       std::string_view content_type("");
-      if (ext_pos != std::string::npos)
-      {
+      if (ext_pos != std::string::npos) {
         auto type_itr = content_types.find(std::string_view(path).substr(ext_pos + 1).data());
-        if (type_itr != content_types.end())
-        {
+        if (type_itr != content_types.end()) {
           content_type = type_itr->second;
           set_header("Content-Type", content_type);
         }
@@ -5816,8 +5812,7 @@ struct generic_http_ctx {
       static_files.insert({path, {content, content_type}});
       respond(content);
     } else {
-      if (it->second.second.size())
-      {
+      if (it->second.second.size()) {
         set_header("Content-Type", it->second.second);
       }
       respond(it->second.first);
@@ -5840,7 +5835,7 @@ struct generic_http_ctx {
 #if 0
     const char* end = (const char*)memchr(start + 1, split_char, line_end - start - 2);
     if (!end) end = line_end - 1;
-#else    
+#else
     const char* end = start + 1;
     while (end < (line_end - 1) and *end != split_char)
       end++;
@@ -6107,7 +6102,7 @@ template <typename F> auto make_http_processor(F handler) {
 
       auto ctx = generic_http_ctx(rb, fiber);
       ctx.socket_fd = fiber.socket_fd;
-      
+
       while (true) {
         ctx.is_body_read_ = false;
         ctx.header_lines.clear();
@@ -6139,48 +6134,49 @@ template <typename F> auto make_http_processor(F handler) {
              cur = rbend + 1;
              break;
            }
-           if (cur[1] == '\n') { // \n already checked by memchr. 
-#else          
+           if (cur[1] == '\n') { // \n already checked by memchr.
+#else
           while ((cur - rb.data()) < rb.end - 3) {
-           if (cur[0] == '\r' and cur[1] == '\n') {
+            if (cur[0] == '\r' and cur[1] == '\n') {
 #endif
-              cur += 2;// skip \r\n
-              ctx.add_header_line(cur);
-              // If we read \r\n twice the header is complete.
-              if (cur[0] == '\r' and cur[1] == '\n')
-              {
-                complete_header = true;
-                cur += 2; // skip \r\n
-                header_end = cur - rb.data();
-                break;
-              }
-            } else
-              cur++;
+          cur += 2; // skip \r\n
+          ctx.add_header_line(cur);
+          // If we read \r\n twice the header is complete.
+          if (cur[0] == '\r' and cur[1] == '\n') {
+            complete_header = true;
+            cur += 2; // skip \r\n
+            header_end = cur - rb.data();
+            break;
           }
-
-          // Read more data from the socket if the headers are not complete.
-          if (!complete_header && 0 == rb.read_more(fiber)) return;
         }
-
-        // Header is complete. Process it.
-        // Run the handler.
-        assert(rb.cursor <= rb.end);
-        ctx.body_start = std::string_view(rb.data() + header_end, rb.end - header_end);
-        ctx.prepare_request();
-        handler(ctx);
-        assert(rb.cursor <= rb.end);
-
-        // Update the cursor the beginning of the next request.
-        ctx.prepare_next_request();
-        // if read buffer is empty, we can flush the output buffer.
-        if (rb.empty())
-          ctx.flush_responses();
+        else cur++;
       }
-    } catch (const std::runtime_error& e) {
-      std::cerr << "Error: " << e.what() << std::endl;
-      return;
+
+      // Read more data from the socket if the headers are not complete.
+      if (!complete_header && 0 == rb.read_more(fiber))
+        return;
     }
-  };
+
+    // Header is complete. Process it.
+    // Run the handler.
+    assert(rb.cursor <= rb.end);
+    ctx.body_start = std::string_view(rb.data() + header_end, rb.end - header_end);
+    ctx.prepare_request();
+    handler(ctx);
+    assert(rb.cursor <= rb.end);
+
+    // Update the cursor the beginning of the next request.
+    ctx.prepare_next_request();
+    // if read buffer is empty, we can flush the output buffer.
+    if (rb.empty())
+      ctx.flush_responses();
+  }
+}
+catch (const std::runtime_error& e) {
+  std::cerr << "Error: " << e.what() << std::endl;
+  return;
+}
+};
 }
 
 } // namespace http_async_impl
@@ -6705,7 +6701,6 @@ struct http_response {
 
 namespace li {
 
-
 template <typename... O>
 auto http_serve(api<http_request, http_response> api, int port, O... opts) {
 
@@ -6739,23 +6734,31 @@ auto http_serve(api<http_request, http_response> api, int port, O... opts) {
   auto server_thread = std::make_shared<std::thread>([=]() {
     std::cout << "Starting lithium::http_server on port " << port << std::endl;
 
-    if constexpr (has_key(options, s::ssl_key))
-    {
-      static_assert(has_key(options, s::ssl_certificate), "You need to provide both the ssl_certificate option and the ssl_key option.");
+    if constexpr (has_key(options, s::ssl_key)) {
+      static_assert(has_key(options, s::ssl_certificate),
+                    "You need to provide both the ssl_certificate option and the ssl_key option.");
       std::string ssl_key = options.ssl_key;
       std::string ssl_cert = options.ssl_certificate;
       std::string ssl_ciphers = "";
-      if constexpr (has_key(options, s::ssl_ciphers))
-      {
+      if constexpr (has_key(options, s::ssl_ciphers)) {
         ssl_ciphers = options.ssl_ciphers;
       }
-      start_tcp_server(port, SOCK_STREAM, nthreads,
-                       http_async_impl::make_http_processor(std::move(handler)),
-                       ssl_key, ssl_cert, ssl_ciphers);
+      try {
+        start_tcp_server(port, SOCK_STREAM, nthreads,
+                         http_async_impl::make_http_processor(std::move(handler)), ssl_key,
+                         ssl_cert, ssl_ciphers);
+      } catch (...) {
+        return;
+      }
+    } else {
+      try {
+        start_tcp_server(port, SOCK_STREAM, nthreads,
+                         http_async_impl::make_http_processor(std::move(handler)));
+
+      } catch (...) {
+        return;
+      }
     }
-    else
-      start_tcp_server(port, SOCK_STREAM, nthreads,
-                       http_async_impl::make_http_processor(std::move(handler)));
     date_thread->join();
   });
 

@@ -14,13 +14,13 @@
 
 #include <boost/lexical_cast.hpp>
 
-#include <li/http_server/output_buffer.hh>
-#include <li/http_server/input_buffer.hh>
 #include <li/http_server/error.hh>
+#include <li/http_server/http_top_header_builder.hh>
+#include <li/http_server/input_buffer.hh>
+#include <li/http_server/output_buffer.hh>
 #include <li/http_server/symbols.hh>
 #include <li/http_server/tcp_server.hh>
 #include <li/http_server/url_unescape.hh>
-#include <li/http_server/http_top_header_builder.hh>
 
 #include <li/http_server/content_types.hh>
 
@@ -31,20 +31,21 @@ namespace http_async_impl {
 static char* date_buf = nullptr;
 static int date_buf_size = 0;
 
-using ::li::content_types; // static std::unordered_map<std::string_view, std::string_view> content_types
+using ::li::content_types; // static std::unordered_map<std::string_view, std::string_view>
+                           // content_types
 
-static thread_local std::unordered_map<std::string, std::pair<std::string_view, std::string_view>> static_files;
+static thread_local std::unordered_map<std::string, std::pair<std::string_view, std::string_view>>
+    static_files;
 
 http_top_header_builder http_top_header [[gnu::weak]];
 
-template <typename FIBER>
-struct generic_http_ctx {
+template <typename FIBER> struct generic_http_ctx {
 
   generic_http_ctx(input_buffer& _rb, FIBER& _fiber) : rb(_rb), fiber(_fiber) {
     get_parameters_map.reserve(10);
     response_headers.reserve(20);
 
-    output_stream = output_buffer(50*1024, [&](const char* d, int s) { fiber.write(d, s); });
+    output_stream = output_buffer(50 * 1024, [&](const char* d, int s) { fiber.write(d, s); });
 
     headers_stream =
         output_buffer(1000, [&](const char* d, int s) { output_stream << std::string_view(d, s); });
@@ -147,9 +148,8 @@ struct generic_http_ctx {
     // #ifdef LITHIUM_SERVER_NAME
     //   #define MACRO_TO_STR2(L) #L
     //   #define MACRO_TO_STR(L) MACRO_TO_STR2(L)
-    //   output_stream << "\r\nConnection: keep-alive\r\nServer: " MACRO_TO_STR(LITHIUM_SERVER_NAME) "\r\n";
-    //   #undef MACRO_TO_STR
-    //   #undef MACRO_TO_STR2
+    //   output_stream << "\r\nConnection: keep-alive\r\nServer: " MACRO_TO_STR(LITHIUM_SERVER_NAME)
+    //   "\r\n"; #undef MACRO_TO_STR #undef MACRO_TO_STR2
     // #else
     //   output_stream << "\r\nConnection: keep-alive\r\nServer: Lithium\r\n";
     // #endif
@@ -183,7 +183,6 @@ struct generic_http_ctx {
         content_type_ = get_value();
         chunked_ = (content_type_ == "chunked");
       }
-
     }
   }
 
@@ -221,9 +220,7 @@ struct generic_http_ctx {
     headers_stream.flush(); // flushes to output_stream.
     output_stream << "Content-Length: " << json_stream.to_string_view().size() << "\r\n\r\n";
     json_stream.flush(); // flushes to output_stream.
-    
   }
-
 
   void respond_if_needed() {
     if (!response_written_) {
@@ -314,16 +311,15 @@ struct generic_http_ctx {
       int file_size = lseek(fd, (size_t)0, SEEK_END);
       auto content =
           std::string_view((char*)mmap(0, file_size, PROT_READ, MAP_SHARED, fd, 0), file_size);
-      if (!content.data()) throw http_error::not_found("File not found.");
+      if (!content.data())
+        throw http_error::not_found("File not found.");
       close(fd);
 
       size_t ext_pos = std::string_view(path).rfind('.');
       std::string_view content_type("");
-      if (ext_pos != std::string::npos)
-      {
+      if (ext_pos != std::string::npos) {
         auto type_itr = content_types.find(std::string_view(path).substr(ext_pos + 1).data());
-        if (type_itr != content_types.end())
-        {
+        if (type_itr != content_types.end()) {
           content_type = type_itr->second;
           set_header("Content-Type", content_type);
         }
@@ -331,8 +327,7 @@ struct generic_http_ctx {
       static_files.insert({path, {content, content_type}});
       respond(content);
     } else {
-      if (it->second.second.size())
-      {
+      if (it->second.second.size()) {
         set_header("Content-Type", it->second.second);
       }
       respond(it->second.first);
@@ -355,7 +350,7 @@ struct generic_http_ctx {
 #if 0
     const char* end = (const char*)memchr(start + 1, split_char, line_end - start - 2);
     if (!end) end = line_end - 1;
-#else    
+#else
     const char* end = start + 1;
     while (end < (line_end - 1) and *end != split_char)
       end++;
@@ -622,7 +617,7 @@ template <typename F> auto make_http_processor(F handler) {
 
       auto ctx = generic_http_ctx(rb, fiber);
       ctx.socket_fd = fiber.socket_fd;
-      
+
       while (true) {
         ctx.is_body_read_ = false;
         ctx.header_lines.clear();
@@ -654,48 +649,49 @@ template <typename F> auto make_http_processor(F handler) {
              cur = rbend + 1;
              break;
            }
-           if (cur[1] == '\n') { // \n already checked by memchr. 
-#else          
+           if (cur[1] == '\n') { // \n already checked by memchr.
+#else
           while ((cur - rb.data()) < rb.end - 3) {
-           if (cur[0] == '\r' and cur[1] == '\n') {
+            if (cur[0] == '\r' and cur[1] == '\n') {
 #endif
-              cur += 2;// skip \r\n
-              ctx.add_header_line(cur);
-              // If we read \r\n twice the header is complete.
-              if (cur[0] == '\r' and cur[1] == '\n')
-              {
-                complete_header = true;
-                cur += 2; // skip \r\n
-                header_end = cur - rb.data();
-                break;
-              }
-            } else
-              cur++;
+          cur += 2; // skip \r\n
+          ctx.add_header_line(cur);
+          // If we read \r\n twice the header is complete.
+          if (cur[0] == '\r' and cur[1] == '\n') {
+            complete_header = true;
+            cur += 2; // skip \r\n
+            header_end = cur - rb.data();
+            break;
           }
-
-          // Read more data from the socket if the headers are not complete.
-          if (!complete_header && 0 == rb.read_more(fiber)) return;
         }
-
-        // Header is complete. Process it.
-        // Run the handler.
-        assert(rb.cursor <= rb.end);
-        ctx.body_start = std::string_view(rb.data() + header_end, rb.end - header_end);
-        ctx.prepare_request();
-        handler(ctx);
-        assert(rb.cursor <= rb.end);
-
-        // Update the cursor the beginning of the next request.
-        ctx.prepare_next_request();
-        // if read buffer is empty, we can flush the output buffer.
-        if (rb.empty())
-          ctx.flush_responses();
+        else cur++;
       }
-    } catch (const std::runtime_error& e) {
-      std::cerr << "Error: " << e.what() << std::endl;
-      return;
+
+      // Read more data from the socket if the headers are not complete.
+      if (!complete_header && 0 == rb.read_more(fiber))
+        return;
     }
-  };
+
+    // Header is complete. Process it.
+    // Run the handler.
+    assert(rb.cursor <= rb.end);
+    ctx.body_start = std::string_view(rb.data() + header_end, rb.end - header_end);
+    ctx.prepare_request();
+    handler(ctx);
+    assert(rb.cursor <= rb.end);
+
+    // Update the cursor the beginning of the next request.
+    ctx.prepare_next_request();
+    // if read buffer is empty, we can flush the output buffer.
+    if (rb.empty())
+      ctx.flush_responses();
+  }
+}
+catch (const std::runtime_error& e) {
+  std::cerr << "Error: " << e.what() << std::endl;
+  return;
+}
+};
 }
 
 } // namespace http_async_impl
@@ -705,7 +701,6 @@ template <typename F> auto make_http_processor(F handler) {
 #include <li/http_server/response.hh>
 
 namespace li {
-
 
 template <typename... O>
 auto http_serve(api<http_request, http_response> api, int port, O... opts) {
@@ -740,23 +735,31 @@ auto http_serve(api<http_request, http_response> api, int port, O... opts) {
   auto server_thread = std::make_shared<std::thread>([=]() {
     std::cout << "Starting lithium::http_server on port " << port << std::endl;
 
-    if constexpr (has_key(options, s::ssl_key))
-    {
-      static_assert(has_key(options, s::ssl_certificate), "You need to provide both the ssl_certificate option and the ssl_key option.");
+    if constexpr (has_key(options, s::ssl_key)) {
+      static_assert(has_key(options, s::ssl_certificate),
+                    "You need to provide both the ssl_certificate option and the ssl_key option.");
       std::string ssl_key = options.ssl_key;
       std::string ssl_cert = options.ssl_certificate;
       std::string ssl_ciphers = "";
-      if constexpr (has_key(options, s::ssl_ciphers))
-      {
+      if constexpr (has_key(options, s::ssl_ciphers)) {
         ssl_ciphers = options.ssl_ciphers;
       }
-      start_tcp_server(port, SOCK_STREAM, nthreads,
-                       http_async_impl::make_http_processor(std::move(handler)),
-                       ssl_key, ssl_cert, ssl_ciphers);
+      try {
+        start_tcp_server(port, SOCK_STREAM, nthreads,
+                         http_async_impl::make_http_processor(std::move(handler)), ssl_key,
+                         ssl_cert, ssl_ciphers);
+      } catch (...) {
+        return;
+      }
+    } else {
+      try {
+        start_tcp_server(port, SOCK_STREAM, nthreads,
+                         http_async_impl::make_http_processor(std::move(handler)));
+
+      } catch (...) {
+        return;
+      }
     }
-    else
-      start_tcp_server(port, SOCK_STREAM, nthreads,
-                       http_async_impl::make_http_processor(std::move(handler)));
     date_thread->join();
   });
 

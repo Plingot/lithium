@@ -7053,27 +7053,27 @@ struct async_fiber_context {
   inline async_fiber_context(const async_fiber_context&) = delete;
 
   inline async_fiber_context(async_reactor* reactor, boost::context::continuation&& sink,
-                      int fiber_id, int socket_fd, sockaddr in_addr)
+                             int fiber_id, int socket_fd, sockaddr in_addr)
       : reactor(reactor), sink(std::forward<boost::context::continuation&&>(sink)),
-        fiber_id(fiber_id), socket_fd(socket_fd),
-        in_addr(in_addr) {}
+        fiber_id(fiber_id), socket_fd(socket_fd), in_addr(in_addr) {}
 
   inline void yield() { sink = sink.resume(); }
-       
+
   inline bool ssl_handshake(std::unique_ptr<ssl_context>& ssl_ctx) {
-    if (!ssl_ctx) return false;
+    if (!ssl_ctx)
+      return false;
 
     ssl = SSL_new(ssl_ctx->ctx);
     SSL_set_fd(ssl, socket_fd);
 
     while (int ret = SSL_accept(ssl)) {
-      if (ret == 1) return true;
+      if (ret == 1)
+        return true;
 
       int err = SSL_get_error(ssl, ret);
       if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ)
         this->yield();
-      else
-      {
+      else {
         ERR_print_errors_fp(stderr);
         return false;
         // throw std::runtime_error("Error during https handshake.");
@@ -7083,8 +7083,7 @@ struct async_fiber_context {
   }
 
   inline ~async_fiber_context() {
-    if (ssl)
-    {
+    if (ssl) {
       SSL_shutdown(ssl);
       SSL_free(ssl);
     }
@@ -7162,13 +7161,11 @@ struct async_reactor {
     return fibers[fiber_idx];
   }
 
-  inline void reassign_fd_to_fiber(int fd, int fiber_idx) {
-    fd_to_fiber_idx[fd] = fiber_idx;
-  }
+  inline void reassign_fd_to_fiber(int fd, int fiber_idx) { fd_to_fiber_idx[fd] = fiber_idx; }
 
   inline void epoll_ctl(int epoll_fd, int fd, int action, uint32_t flags) {
 
-    #if __linux__
+#if __linux__
     {
       epoll_event event;
       memset(&event, 0, sizeof(event));
@@ -7177,21 +7174,21 @@ struct async_reactor {
       if (-1 == ::epoll_ctl(epoll_fd, action, fd, &event) and errno != EEXIST)
         std::cout << "epoll_ctl error: " << strerror(errno) << std::endl;
     }
-    #elif __APPLE__
+#elif __APPLE__
     {
       struct kevent ev_set;
       EV_SET(&ev_set, fd, flags, action, 0, 0, NULL);
       kevent(epoll_fd, &ev_set, 1, NULL, 0, NULL);
     }
-    #endif
+#endif
   };
 
   inline void epoll_add(int new_fd, int flags, int fiber_idx = -1) {
-    #if __linux__
+#if __linux__
     epoll_ctl(epoll_fd, new_fd, EPOLL_CTL_ADD, flags);
-    #elif __APPLE__
+#elif __APPLE__
     epoll_ctl(epoll_fd, new_fd, EV_ADD, flags);
-    #endif
+#endif
 
     // Associate new_fd to the fiber.
     if (int(fd_to_fiber_idx.size()) < new_fd + 1)
@@ -7199,13 +7196,13 @@ struct async_reactor {
     fd_to_fiber_idx[new_fd] = fiber_idx;
   }
 
-  inline void epoll_mod(int fd, int flags) { 
-    #if __linux__
-    epoll_ctl(epoll_fd, fd, EPOLL_CTL_MOD, flags); 
-    #elif __APPLE__
-    epoll_ctl(epoll_fd, fd, EV_ADD, flags); 
-    #endif
-    }
+  inline void epoll_mod(int fd, int flags) {
+#if __linux__
+    epoll_ctl(epoll_fd, fd, EPOLL_CTL_MOD, flags);
+#elif __APPLE__
+    epoll_ctl(epoll_fd, fd, EV_ADD, flags);
+#endif
+  }
 
   template <typename H> void event_loop(int listen_fd, H handler) {
 
@@ -7229,7 +7226,6 @@ struct async_reactor {
     timeout.tv_nsec = 10000;
 #endif
 
-
     // Main loop.
     while (!quit_signal_catched) {
 
@@ -7244,23 +7240,24 @@ struct async_reactor {
       if (quit_signal_catched)
         break;
 
-      if (n_events == 0 )
+      if (n_events == 0)
         for (int i = 0; i < fibers.size(); i++)
           if (fibers[i])
             fibers[i] = fibers[i].resume();
 
       for (int i = 0; i < n_events; i++) {
 
-
 #if __APPLE__
         int event_flags = events[i].flags;
         int event_fd = events[i].ident;
 
-        if (events[i].filter == EVFILT_SIGNAL)
-        {
-          if (event_fd == SIGINT) std::cout << "SIGINT" << std::endl; 
-          if (event_fd == SIGTERM) std::cout << "SIGTERM" << std::endl; 
-          if (event_fd == SIGKILL) std::cout << "SIGKILL" << std::endl; 
+        if (events[i].filter == EVFILT_SIGNAL) {
+          if (event_fd == SIGINT)
+            std::cout << "SIGINT" << std::endl;
+          if (event_fd == SIGTERM)
+            std::cout << "SIGTERM" << std::endl;
+          if (event_fd == SIGKILL)
+            std::cout << "SIGKILL" << std::endl;
           quit_signal_catched = true;
           break;
         }
@@ -7269,7 +7266,6 @@ struct async_reactor {
         int event_flags = events[i].events;
         int event_fd = events[i].data.fd;
 #endif
-
 
         // Handle errors on sockets.
 #if __linux__
@@ -7345,8 +7341,7 @@ struct async_reactor {
               scoped_fd sfd{socket_fd}; // Will finally close the fd.
               auto ctx = async_fiber_context(this, std::move(sink), fiber_idx, socket_fd, in_addr);
               try {
-                if (ssl_ctx && !ctx.ssl_handshake(this->ssl_ctx))
-                {
+                if (ssl_ctx && !ctx.ssl_handshake(this->ssl_ctx)) {
                   std::cerr << "Error during SSL handshake" << std::endl;
                   return std::move(ctx.sink);
                 }
@@ -7375,30 +7370,24 @@ struct async_reactor {
         }
 
         // Wakeup fibers if needed.
-        while (defered_resume.size())
-        {
+        while (defered_resume.size()) {
           int fiber_id = defered_resume.front();
           defered_resume.pop_front();
           assert(fiber_id < fibers.size());
           auto& fiber = fibers[fiber_id];
-          if (fiber)
-          {
-            // std::cout << "wakeup " << fiber_id << std::endl; 
+          if (fiber) {
+            // std::cout << "wakeup " << fiber_id << std::endl;
             fiber = fiber.resume();
           }
         }
-
-
       }
 
       // Call and Flush the defered functions.
-      if (defered_functions.size())
-      {
+      if (defered_functions.size()) {
         for (auto& f : defered_functions)
           f();
         defered_functions.clear();
       }
-
     }
     std::cout << "END OF EVENT LOOP" << std::endl;
     close(epoll_fd);
@@ -7410,18 +7399,14 @@ static void shutdown_handler(int sig) {
   std::cout << "The server will shutdown..." << std::endl;
 }
 
-void async_fiber_context::epoll_add(int fd, int flags) {
-  reactor->epoll_add(fd, flags, fiber_id);
-}
+void async_fiber_context::epoll_add(int fd, int flags) { reactor->epoll_add(fd, flags, fiber_id); }
 void async_fiber_context::epoll_mod(int fd, int flags) { reactor->epoll_mod(fd, flags); }
 
-void async_fiber_context::defer(const std::function<void()>& fun)
-{
+void async_fiber_context::defer(const std::function<void()>& fun) {
   this->reactor->defered_functions.push_back(fun);
 }
 
-void async_fiber_context::defer_fiber_resume(int fiber_id)
-{
+void async_fiber_context::defer_fiber_resume(int fiber_id) {
   this->reactor->defered_resume.push_back(fiber_id);
 }
 
@@ -7443,6 +7428,9 @@ void start_tcp_server(int port, int socktype, int nthreads, H conn_handler,
   sigaction(SIGQUIT, &act, 0);
 
   int server_fd = impl::create_and_bind(port, socktype);
+  if (server_fd == -1) {
+    return;
+  }
   std::vector<std::thread> ths;
   for (int i = 0; i < nthreads; i++)
     ths.push_back(std::thread([&] {

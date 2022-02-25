@@ -9,6 +9,7 @@
  */
 #pragma once
 
+#include <boost/context/continuation.hpp>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -21,7 +22,6 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <boost/context/continuation.hpp>
 
 #include <thread>
 #include <vector>
@@ -86,6 +86,7 @@ static int create_and_bind(int port, int socktype) {
 
   if (rp == NULL) {
     fprintf(stderr, "Could not bind: %s\n", strerror(errno));
+    throw std::runtime_error("Could not bind address/port");
     return -1;
   }
 
@@ -161,9 +162,10 @@ template <typename H> int moustique_listen_fd(int listen_fd, int nthreads, H con
     std::vector<ctx::continuation> fibers;
     std::vector<int> fd_to_fiber_idx;
 
-    auto fiber_from_fd = [&](int fd) -> ctx::continuation& { 
+    auto fiber_from_fd = [&](int fd) -> ctx::continuation& {
       assert(fd >= 0 and fd < fd_to_fiber_idx.size());
-      return fibers[fd_to_fiber_idx[fd]]; };
+      return fibers[fd_to_fiber_idx[fd]];
+    };
 
     auto epoll_ctl_del = [&](int fd) {
       if (fd >= 0 and fd < fd_to_fiber_idx.size())
@@ -217,9 +219,8 @@ template <typename H> int moustique_listen_fd(int listen_fd, int nthreads, H con
         for (int i = 0; i < fibers.size(); i++)
           if (fibers[i])
             fibers[i] = fibers[i].resume();
-      
-      for (int i = 0; i < n_events; i++)
-      {
+
+      for (int i = 0; i < n_events; i++) {
         // std::cout << " WAKEUP " << events[i].data.fd << std::endl;
 
         if ((events[i].events & EPOLLERR) || (events[i].events & EPOLLHUP) ||
@@ -253,11 +254,11 @@ template <typename H> int moustique_listen_fd(int listen_fd, int nthreads, H con
             while (fiber_idx < fibers.size() && fibers[fiber_idx])
               fiber_idx++;
             if (fiber_idx >= fibers.size())
-              fibers.resize((fibers.size()+1) * 2);
-
+              fibers.resize((fibers.size() + 1) * 2);
 
             // Function to subscribe to other files descriptor.
-            auto listen_to_new_fd = [epoll_fd, &fd_to_fiber_idx, fiber_idx](int new_fd, int flags = EPOLLET) {
+            auto listen_to_new_fd = [epoll_fd, &fd_to_fiber_idx, fiber_idx](int new_fd,
+                                                                            int flags = EPOLLET) {
               // std::cout << " SUBSCRIBE " << new_fd << std::endl;
               // Listen to the fd if not already done before.
               epoll_ctl(epoll_fd, new_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT | EPOLLRDHUP | flags);
@@ -281,74 +282,76 @@ template <typename H> int moustique_listen_fd(int listen_fd, int nthreads, H con
 
             struct end_of_file {};
             assert(fiber_idx < fibers.size());
-            fibers[fiber_idx] = ctx::callcc([fd = infd, &conn_handler, epoll_ctl_del, // wait_for_non_io_event,
-                                        listen_to_new_fd, terminate_fiber](ctx::continuation&& sink) {
-              try {
+            fibers[fiber_idx] =
+                ctx::callcc([fd = infd, &conn_handler, epoll_ctl_del, // wait_for_non_io_event,
+                             listen_to_new_fd, terminate_fiber](ctx::continuation&& sink) {
+                  try {
 
-                // ctx::continuation sink = std::move(_sink);
-                auto read = [fd, &sink](char* buf, int max_size) {
-                  ssize_t count = ::recv(fd, buf, max_size, 0);
-                  while (count <= 0) {
-                    if ((count < 0 and errno != EAGAIN) or count == 0)
-                      return ssize_t(0);
-                    sink = sink.resume();
-                    count = ::recv(fd, buf, max_size, 0);
-                  }
-                  return count;
-                };
+                    // ctx::continuation sink = std::move(_sink);
+                    auto read = [fd, &sink](char* buf, int max_size) {
+                      ssize_t count = ::recv(fd, buf, max_size, 0);
+                      while (count <= 0) {
+                        if ((count < 0 and errno != EAGAIN) or count == 0)
+                          return ssize_t(0);
+                        sink = sink.resume();
+                        count = ::recv(fd, buf, max_size, 0);
+                      }
+                      return count;
+                    };
 
-                auto write = [fd, &sink](const char* buf, int size) {
-                  if (!buf or !size) {
-                    // std::cout << "pause" << std::endl;
-                    sink = sink.resume();
-                    return true;
+                    auto write = [fd, &sink](const char* buf, int size) {
+                      if (!buf or !size) {
+                        // std::cout << "pause" << std::endl;
+                        sink = sink.resume();
+                        return true;
+                      }
+                      const char* end = buf + size;
+                      ssize_t count = ::send(fd, buf, end - buf, MSG_NOSIGNAL);
+                      if (count > 0)
+                        buf += count;
+                      while (buf != end) {
+                        if ((count < 0 and errno != EAGAIN) or count == 0)
+                          return false;
+                        sink = sink.resume();
+                        count = ::send(fd, buf, end - buf, MSG_NOSIGNAL);
+                        if (count > 0)
+                          buf += count;
+                      }
+                      return true;
+                    };
+                    // auto wait_for = [&](auto e) {
+                    //   wait_for_non_io_event(e, fd);
+                    //   sink = sink.resume();
+                    // };
+                    // FIXME MERGE:
+                    //   read, write, listen_to_new_fd, wait_for, notify in one object.
+                    conn_handler(fd, read, write, listen_to_new_fd, epoll_ctl_del);
+                    terminate_fiber(fd);
+                  } catch (fiber_exception& ex) {
+                    terminate_fiber(fd);
+                    return std::move(ex.c);
+                  } catch (const std::runtime_error& e) {
+                    terminate_fiber(fd);
+                    std::cerr << "FATAL ERRROR: exception in fiber: " << e.what() << std::endl;
+                    assert(0);
+                    return std::move(sink);
                   }
-                  const char* end = buf + size;
-                  ssize_t count = ::send(fd, buf, end - buf, MSG_NOSIGNAL);
-                  if (count > 0)
-                    buf += count;
-                  while (buf != end) {
-                    if ((count < 0 and errno != EAGAIN) or count == 0)
-                      return false;
-                    sink = sink.resume();
-                    count = ::send(fd, buf, end - buf, MSG_NOSIGNAL);
-                    if (count > 0)
-                      buf += count;
-                  }
-                  return true;
-                };
-                // auto wait_for = [&](auto e) {
-                //   wait_for_non_io_event(e, fd);
-                //   sink = sink.resume();
-                // };
-                // FIXME MERGE:
-                //   read, write, listen_to_new_fd, wait_for, notify in one object.
-                conn_handler(fd, read, write, listen_to_new_fd, epoll_ctl_del);
-                terminate_fiber(fd);
-              } catch (fiber_exception& ex) {
-                terminate_fiber(fd);
-                return std::move(ex.c);
-              } catch (const std::runtime_error& e) {
-                terminate_fiber(fd);
-                std::cerr << "FATAL ERRROR: exception in fiber: " << e.what() << std::endl;
-                assert(0);
-                return std::move(sink);
-              }
 
-              return std::move(sink);
-            });
+                  return std::move(sink);
+                });
           }
 
         } else // Data available on existing sockets. Wake up the fiber associated with
-              // events[i].data.fd.
+               // events[i].data.fd.
         {
           int event_fd = events[i].data.fd;
           if (event_fd >= 0 && event_fd < fd_to_fiber_idx.size()) {
             auto& fiber = fiber_from_fd(event_fd);
-            if(fiber) fiber = fiber.resume();
-          }
-          else
-            std::cerr << "Epoll returned a file descriptor that we did not register: " << event_fd << std::endl;
+            if (fiber)
+              fiber = fiber.resume();
+          } else
+            std::cerr << "Epoll returned a file descriptor that we did not register: " << event_fd
+                      << std::endl;
         }
       }
     }

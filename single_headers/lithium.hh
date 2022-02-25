@@ -7003,6 +7003,7 @@ static int create_and_bind(int port, int socktype) {
 
   if (rp == NULL) {
     fprintf(stderr, "Could not bind: %s\n", strerror(errno));
+    throw std::runtime_error("Could not bind address/port");
     return -1;
   }
 

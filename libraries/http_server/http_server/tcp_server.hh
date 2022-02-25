@@ -493,7 +493,7 @@ void start_tcp_server(int port, int socktype, int nthreads, H conn_handler,
 
   int server_fd = impl::create_and_bind(port, socktype);
   if (server_fd == -1) {
-    return;
+    throw std::runtime_error("unable to bind port");
   }
   std::vector<std::thread> ths;
   for (int i = 0; i < nthreads; i++)
